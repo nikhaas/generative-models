@@ -90,7 +90,7 @@ G_solver = tf.train.AdamOptimizer().minimize(G_loss, var_list=theta_G)
 mb_size = 128
 Z_dim = 100
 
-mnist = input_data.read_data_sets('../../MNIST_data', one_hot=True)
+mnist = input_data.read_data_sets('/media/niklas/lin-win-hdd/nn_datasets/image/mnist', one_hot=True)
 
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
