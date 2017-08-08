@@ -11,25 +11,34 @@ def xavier_init(size):
     xavier_stddev = 1. / tf.sqrt(in_dim / 2.)
     return tf.random_normal(shape=size, stddev=xavier_stddev)
 
+# The operations for the discriminator
+with tf.name_scope("discriminator") as discriminator_scope:
+    with tf.name_scope("inputs"):
+        X = tf.placeholder(tf.float32, shape=[None, 784], name="X")
 
-X = tf.placeholder(tf.float32, shape=[None, 784])
+    with tf.name_scope("layers"):
+        with tf.name_scope("1"):
+            D_W1 = tf.Variable(xavier_init([784, 128]), name="D_W1")
+            D_b1 = tf.Variable(tf.zeros(shape=[128]), name="D_b1")
 
-D_W1 = tf.Variable(xavier_init([784, 128]))
-D_b1 = tf.Variable(tf.zeros(shape=[128]))
-
-D_W2 = tf.Variable(xavier_init([128, 1]))
-D_b2 = tf.Variable(tf.zeros(shape=[1]))
+        with tf.name_scope("2"):
+            D_W2 = tf.Variable(xavier_init([128, 1]), name="D_W2")
+            D_b2 = tf.Variable(tf.zeros(shape=[1]), name="D_b2")
 
 theta_D = [D_W1, D_W2, D_b1, D_b2]
 
+# The operations for the generator
+with tf.name_scope("generator") as generator_scope:
+    with tf.name_scope("inputs"):
+        Z = tf.placeholder(tf.float32, shape=[None, 100], name="Z")
 
-Z = tf.placeholder(tf.float32, shape=[None, 100])
-
-G_W1 = tf.Variable(xavier_init([100, 128]))
-G_b1 = tf.Variable(tf.zeros(shape=[128]))
-
-G_W2 = tf.Variable(xavier_init([128, 784]))
-G_b2 = tf.Variable(tf.zeros(shape=[784]))
+    with tf.name_scope("layers"):
+        with tf.name_scope("1"):
+            G_W1 = tf.Variable(xavier_init([100, 128]), name="G_W1")
+            G_b1 = tf.Variable(tf.zeros(shape=[128]), name="G_b1")
+        with tf.name_scope("2"):
+            G_W2 = tf.Variable(xavier_init([128, 784]), name="G_W2")
+            G_b2 = tf.Variable(tf.zeros(shape=[784]), name="G_b2")
 
 theta_G = [G_W1, G_W2, G_b1, G_b2]
 
@@ -54,6 +63,8 @@ def discriminator(x):
     return D_prob, D_logit
 
 
+# Export the plots to tensorboard via image
+
 def plot(samples):
     fig = plt.figure(figsize=(4, 4))
     gs = gridspec.GridSpec(4, 4)
@@ -69,24 +80,38 @@ def plot(samples):
 
     return fig
 
-
-G_sample = generator(Z)
-D_real, D_logit_real = discriminator(X)
-D_fake, D_logit_fake = discriminator(G_sample)
+with tf.name_scope(generator_scope):
+    G_sample = generator(Z)  # transform sample to image
+# This is why 2 discriminators are present
+# First, pass X through the discriminator, then the generator sample
+# See V(G,D)
+with tf.name_scope(discriminator_scope):
+    D_real, D_logit_real = discriminator(X)  # real image value
+    # there are new operations initialized when invoking this
+    D_fake, D_logit_fake = discriminator(G_sample)  # fake image value
 
 # D_loss = -tf.reduce_mean(tf.log(D_real) + tf.log(1. - D_fake))
 # G_loss = -tf.reduce_mean(tf.log(D_fake))
 
 # Alternative losses:
 # -------------------
-D_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logit_real, labels=tf.ones_like(D_logit_real)))
-D_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logit_fake, labels=tf.zeros_like(D_logit_fake)))
-D_loss = D_loss_real + D_loss_fake
-G_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logit_fake, labels=tf.ones_like(D_logit_fake)))
+# ones like: 1 = true data
+with tf.name_scope("loss"):
+    D_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logit_real, labels=tf.ones_like(D_logit_real)), name="D_loss_real")
+    # zeros like: 0 is generated / fake data
+    D_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logit_fake, labels=tf.zeros_like(D_logit_fake)), name="D_loss_fake")
+    # The following OP is not present in the graph!
+    # This is adding 2 scalars
+    D_loss = tf.add(D_loss_real, D_loss_fake, "D_loss")
+    # The generator wants to make the discriminator meet 1
+    G_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logit_fake, labels=tf.ones_like(D_logit_fake)), name="G_loss")
 
+# Define the solvers
+# Are two solvers really necessary?
 D_solver = tf.train.AdamOptimizer().minimize(D_loss, var_list=theta_D)
 G_solver = tf.train.AdamOptimizer().minimize(G_loss, var_list=theta_G)
 
+# Interesting: No growth in GPU consumption with a larger batch size
 mb_size = 128
 Z_dim = 100
 
@@ -100,6 +125,9 @@ if not os.path.exists('out/'):
 
 i = 0
 
+no_of_generator_samples = 16
+file_writer = tf.summary.FileWriter('./logs/var_names_and_extended_name_scope', sess.graph)
+
 for it in range(1000000):
     if it % 1000 == 0:
         samples = sess.run(G_sample, feed_dict={Z: sample_Z(16, Z_dim)})
@@ -111,6 +139,7 @@ for it in range(1000000):
 
     X_mb, _ = mnist.train.next_batch(mb_size)
 
+    # Output loss
     _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim)})
     _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={Z: sample_Z(mb_size, Z_dim)})
 
@@ -119,3 +148,13 @@ for it in range(1000000):
         print('D loss: {:.4}'. format(D_loss_curr))
         print('G_loss: {:.4}'.format(G_loss_curr))
         print()
+        file_writer.flush()  # well, this is not enough...
+
+
+# TODOS:
+# * export tf.summary.image of the sample images
+# * export scalars and histograms
+# * idea for embedding: export generated images and true images (or their represenations in intermediate layers) and
+#   check out, which ones are aligned
+# Save everything in a checkpoint and start from new =)
+# Use tf.train.supervisor or tf.train.saver
