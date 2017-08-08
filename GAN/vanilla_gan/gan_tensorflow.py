@@ -7,6 +7,7 @@ import os
 
 
 def xavier_init(size):
+    tf.set_random_seed(42)
     in_dim = size[0]
     xavier_stddev = 1. / tf.sqrt(in_dim / 2.)
     return tf.random_normal(shape=size, stddev=xavier_stddev)
@@ -106,6 +107,10 @@ with tf.name_scope("loss"):
     # The generator wants to make the discriminator meet 1
     G_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logit_fake, labels=tf.ones_like(D_logit_fake)), name="G_loss")
 
+# Do we need a global step? See https://www.tensorflow.org/get_started/mnist/mechanics#training
+# global_step = tf.Variable(0, name='global_step', trainable=False)
+
+
 # Define the solvers
 # Are two solvers really necessary?
 D_solver = tf.train.AdamOptimizer().minimize(D_loss, var_list=theta_D)
@@ -126,35 +131,55 @@ if not os.path.exists('out/'):
 i = 0
 
 no_of_generator_samples = 16
-file_writer = tf.summary.FileWriter('./logs/var_names_and_extended_name_scope', sess.graph)
+# TODO: Sort the summaries in collections and merge the collections if needed, sth. like
+# image_summary = tf.summary.merge_all("image")
 
+summary_writer = tf.summary.FileWriter('./logs/var_names_and_extended_name_scope', sess.graph)
+
+# Generate summaries
+image_summary = tf.summary.image("generator", tf.reshape(G_sample, shape=(no_of_generator_samples, 28, 28, 1)),
+                                 max_outputs=9,
+                                 collections="image")
+D_loss_summary = tf.summary.scalar("D_loss", D_loss, collections="loss")
+G_loss_summary = tf.summary.scalar("G_loss", G_loss, collections="loss")
+
+
+
+# TODO: Substitute this loop with the global_step variable
+Z_samples = sample_Z(no_of_generator_samples, Z_dim)
 for it in range(1000000):
-    if it % 1000 == 0:
-        samples = sess.run(G_sample, feed_dict={Z: sample_Z(16, Z_dim)})
 
-        fig = plot(samples)
-        plt.savefig('out/{}.png'.format(str(i).zfill(3)), bbox_inches='tight')
-        i += 1
-        plt.close(fig)
+    # Every 1000 steps,pass inputs to the generator and save the output images
+    if it % 5000 == 0:
+        # TODO: It might not be helpful to sample always different z vectors. Idea: investigate one z vector
+        # over time
+        samples, summary = sess.run([G_sample, image_summary], feed_dict={Z: Z_samples})
+        summary_writer.add_summary(summary, it)
+        # fig = plot(samples)
+        # plt.savefig('out/{}.png'.format(str(i).zfill(3)), bbox_inches='tight')
+        # i += 1
+        # plt.close(fig)
 
     X_mb, _ = mnist.train.next_batch(mb_size)
 
     # Output loss
-    _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim)})
-    _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={Z: sample_Z(mb_size, Z_dim)})
+    # TODO: It should be somehow possible to export the "true" image and the generator-image side by side
+    _, D_loss_curr, d_sum_res = sess.run([D_solver, D_loss, D_loss_summary], feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim)})
+    _, G_loss_curr, g_sum_res = sess.run([G_solver, G_loss, G_loss_summary], feed_dict={Z: sample_Z(mb_size, Z_dim)})
+    # TODO: Fetch a "collection" of summaries here instead of two separate ones. Arrange more intelligent
+
 
     if it % 1000 == 0:
         print('Iter: {}'.format(it))
         print('D loss: {:.4}'. format(D_loss_curr))
         print('G_loss: {:.4}'.format(G_loss_curr))
         print()
-        file_writer.flush()  # well, this is not enough...
+        summary_writer.add_summary(d_sum_res, it)
+        summary_writer.add_summary(g_sum_res, it)
+        summary_writer.flush()  # well, this is not enough...
 
 
-# TODOS:
-# * export tf.summary.image of the sample images
-# * export scalars and histograms
-# * idea for embedding: export generated images and true images (or their represenations in intermediate layers) and
-#   check out, which ones are aligned
-# Save everything in a checkpoint and start from new =)
-# Use tf.train.supervisor or tf.train.saver
+# TODO: Export checkpoints
+# TODO: idea for embedding: export generated images and true images (or their represenations in intermediate layers) and
+# check out, which ones are aligned
+# TODO: Use tf.train.supervisor or tf.train.saver
